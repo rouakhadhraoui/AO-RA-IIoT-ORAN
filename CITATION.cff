@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper."
+title: "AO-RA: Subscription-based Slicing and Resource Allocation for Massive IIoT in O-RAN"
+authors:
+  - family-names: Khadhraoui
+    given-names: Roua
+    affiliation: "Wilfrid Laurier University; National School of Computer Sciences (ENSI)"
+  - family-names: Ferdouse
+    given-names: Lilatul
+    orcid: "https://orcid.org/0000-0002-3761-8125"
+    affiliation: "Wilfrid Laurier University"
+  - family-names: Nasraoui
+    given-names: "Leila"
+    orcid: "https://orcid.org/0000-0003-1864-6363"
+    affiliation: "SUP'COM, University of Carthage; ENSI, University of Manouba"
+license: MIT
+repository-code: "https://github.com/<user>/AO-RA-IIoT-ORAN"
+preferred-citation:
+  type: article
+  title: "Subscription-based Slicing and Resource Allocation for Massive IIoT in O-RAN"
+  authors:
+    - family-names: Khadhraoui
+      given-names: Roua
+    - family-names: Ferdouse
+      given-names: Lilatul
+    - family-names: Nasraoui
+      given-names: "Leila"
+  journal: "submitted to IEEE"
+  year: 2026
