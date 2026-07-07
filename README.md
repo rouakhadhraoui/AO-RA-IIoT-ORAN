@@ -20,6 +20,37 @@ sub-problems, each mapped to its native O-RAN functional entity:
 | SP3         | O-DU          | `a_{b,d}^k, p_d^k` | Lagrangian + KKT          |
 | SP4         | O-CU-UP / UPF | `M_c`           | Closed form (Lemma 1)        |
 
+
+## System architecture
+
+![AO-RA system architecture](docs/architecture.png)
+
+## How it works
+
+IIoT devices (sensors, robots, controllers, cameras) transmit uplink
+data through a shared O-RU to per-slice VNF chains at the O-DU,
+O-CU-UP, and UPF. The AO-RA framework decomposes the joint resource
+allocation problem into four sub-problems, each executed at its native
+O-RAN entity:
+
+1. **SP1 — Service identification (Near-RT RIC):** each device's
+   service class (eMBB / URLLC / mMTC) is retrieved once from the
+   subscription database and fixed before optimization — no online
+   inference.
+2. **SP2 — O-RU association (Near-RT RIC):** a load-aware Greedy
+   Assignment Algorithm (GAA) assigns each device to an O-RU under
+   the fronthaul capacity constraint.
+3. **SP3 — PRB and power allocation (O-DU):** a dual-guided
+   Lagrangian/KKT procedure assigns PRBs and transmit powers while
+   enforcing per-class rate and delay bounds.
+4. **SP4 — VNF sizing (O-CU-UP/UPF):** the minimum number of VNF
+   instances per slice is computed in closed form (Lemma 1) to meet
+   each slice's end-to-end delay budget.
+
+The three sub-problems SP3 → SP4 → SP2 alternate cyclically until the
+weighted sum data rate converges (typically 2–3 iterations).
+
+
 ## Repository structure
 
 ```
