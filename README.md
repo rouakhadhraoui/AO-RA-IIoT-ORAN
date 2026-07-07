@@ -3,7 +3,7 @@
 Reference implementation and simulation code for the paper:
 
 > R. Khadhraoui, L. Ferdouse, and L. Nasraoui, "Subscription-based Slicing and
-> Resource Allocation for Massive IIoT in O-RAN," *submitted to IEEE*.
+> Resource Allocation for Massive IIoT in O-RAN," .
 
 AO-RA is a unified **Alternating Optimization-based Resource Allocation**
 framework for uplink resource allocation in massive IIoT-enabled O-RAN
@@ -41,7 +41,7 @@ sub-problems, each mapped to its native O-RAN functional entity:
 Requires Python ≥ 3.9.
 
 ```bash
-git clone https://github.com/<user>/AO-RA-IIoT-ORAN.git
+git clone https://github.com/rouakhadhraoui/AO-RA-IIoT-ORAN.git
 cd AO-RA-IIoT-ORAN
 pip install -r requirements.txt
 ```
@@ -115,21 +115,15 @@ For the deterministic seed used in the paper (42), all configurations show
 If you use this code, please cite the paper (see `CITATION.cff`):
 
 ```bibtex
-@article{khadhraoui2026aora,
-  author  = {Khadhraoui, Roua and Ferdouse, Lilatul and Nasraoui, Le{\"i}la},
-  title   = {Subscription-based Slicing and Resource Allocation for Massive
-             IIoT in O-RAN},
-  journal = {submitted to IEEE},
+@article{,
+  author  = {},
+  title   = {},
+  journal = {},
   year    = {2026}
 }
 ```
 
 ## License
 
-This project is released under the MIT License — see [LICENSE](LICENSE).
 
-## Contact
 
-- Roua Khadhraoui — Wilfrid Laurier University / ENSI
-- Lilatul Ferdouse (corresponding author) — lferdouse@wlu.ca
-- Leïla Nasraoui — leila.nasraoui@supcom.tn
