@@ -5,11 +5,12 @@ AO-RA: Alternating Optimization-based Resource Allocation for Massive IIoT in O-
 Reference implementation accompanying the paper:
 
     R. Khadhraoui, L. Ferdouse, and L. Nasraoui,
-    "Subscription-based Slicing and Resource Allocation for Massive IIoT in O-RAN"
+    "Alternating Optimization for Resource Allocation in Heterogeneous IIoT
+    Services over O-RAN Networks"
 
 This module contains:
     - System parameters (Table III of the paper)
-    - Rate & SINR models (Section IV-A, Eqs. 6-9, 17)
+    - Rate & SNR models (Section III-B and IV-A, Eqs. 5-10)
     - Scenario generation & SP1 service identification (Section III, V-B)
     - SP2: O-RU association via GAA (Algorithm 1)
     - SP3: PRB and power allocation via Lagrangian + KKT (Section V-D)
@@ -96,21 +97,28 @@ ALPHA0_STEP = 0.1        # Initial sub-gradient step size alpha_0
 
 MAX_PRB_PER_DEVICE = 3   # Cap on PRBs per device (fairness rule in SP3)
 
+# --- Ablation switches (defaults = behaviour reported in the paper) ---------
+RADIO_FROZEN = False     # True: dual variables h_d, m_b frozen at 0 (no pricing)
+VNF_MODE     = 'lemma1'  # 'lemma1' | 'minstable' (M=ceil(Lambda/mu)) | 'max' (M=M_MAX)
+
 
 # ============================================================================
-# 2. RATE & SINR MODELS (Section IV-A)
+# 2. RATE & SNR MODELS (Section III-B and IV-A)
 # ============================================================================
 
-def _rate(sinr, sc, d):
+def _rate(snr, sc, d):
     """
-    Achievable data rate on one PRB for a device of service class `sc`.
+    Achievable data rate r_d^k on ONE PRB for a device of service class `sc`.
 
     Implements Eq. (6) for eMBB (Shannon) and Eqs. (7)-(8) for URLLC/mMTC
-    (finite-blocklength regime).
+    (finite-blocklength regime). The SNR is interference-free: constraint C2
+    makes every PRB exclusive within an O-RU, and inter-cell interference is
+    neglected (Section III-B). The total rate of a device is the sum of this
+    per-PRB rate over its assigned PRBs, Eq. (10) (see compute_rates).
 
     Parameters
     ----------
-    sinr : float   -- SINR on the PRB (linear scale)
+    snr  : float   -- SNR on the PRB (linear scale), Eq. (5)
     sc   : str     -- service class in {'eMBB', 'URLLC', 'mMTC'}
     d    : int     -- device index (kept for interface consistency)
 
@@ -118,18 +126,18 @@ def _rate(sinr, sc, d):
     -------
     float -- achievable rate [bit/s], clipped at 0
     """
-    if sinr <= 0:
+    if snr <= 0:
         return 0.0
 
     # Shannon capacity per PRB, Eq. (6)
-    shannon = BW * np.log2(1.0 + sinr)
+    shannon = BW * np.log2(1.0 + snr)
     if sc == 'eMBB':
         return shannon
 
     # Finite-blocklength penalty for short packets (URLLC/mMTC), Eq. (7)
     N_d    = N_BLOCK[sc]                       # blocklength [channel uses]
     eps_d  = EPSILON[sc]                       # target block error probability
-    C_disp = 1.0 - 1.0 / (1.0 + sinr) ** 2     # channel dispersion V, Eq. (8)
+    C_disp = 1.0 - 1.0 / (1.0 + snr) ** 2     # channel dispersion V, Eq. (8)
 
     # Penalty term zeta = Bw * log2(e) * Q^{-1}(eps) * sqrt(V / N_d)
     # Q^{-1}(eps) = norm.ppf(1 - eps): inverse of the Gaussian tail function
@@ -137,23 +145,6 @@ def _rate(sinr, sc, d):
                * np.sqrt(C_disp / N_d))
 
     return max(0.0, shannon - penalty)         # rate cannot be negative
-
-
-def sinr_lower_bound(d, b, k, p, H, x, D, P_max_arr):
-    """
-    Lower-bound SINR of device d at O-RU b on PRB k, Eq. (17).
-
-    Interference is upper-bounded by assuming every other device
-    associated with O-RU b (x[b, d2] = 1) transmits at its maximum
-    power P_max. This makes the rate concave in p[d, k] (SP3).
-    """
-    # Worst-case interference: co-associated devices at full power
-    I_bar = sum(
-        P_max_arr[d2] * H[b, d2, k] * x[b, d2]
-        for d2 in range(D) if d2 != d
-    )
-    # max(..., 1e-30) guards against division by zero
-    return (p[d, k] * H[b, d, k]) / max(N0 + I_bar, 1e-30)
 
 
 # ============================================================================
@@ -251,9 +242,9 @@ def compute_dynamic_rmin(D, H, z, P_max_d, silent=False):
             best_rate_d = 0.0
             for b in range(B):
                 for k in range(K):
-                    # interference-free SINR at full power
-                    sinr_max = P_max_d[d] * H[b, d, k] / N0
-                    r = _rate(sinr_max, sc, d)
+                    # interference-free SNR at full power
+                    snr_max = P_max_d[d] * H[b, d, k] / N0
+                    r = _rate(snr_max, sc, d)
                     best_rate_d = max(best_rate_d, r)
             min_rate_in_class = min(min_rate_in_class, best_rate_d)
         R_dyn[sc] = max(min_rate_in_class * 0.5, 1e3)   # 50% margin, 1 kbps floor
@@ -286,8 +277,8 @@ def greedy_association(D, H, z, P_max_d):
     def estimate_rate(d, b):
         """Interference-free rate proxy, discounted by a crowding factor."""
         ch_mean    = np.mean(H[b, d, :])          # mean gain over the K PRBs
-        sinr_est   = P_max_d[d] * ch_mean / N0    # full power, no interference
-        r_est      = _rate(sinr_est, z[d], d)
+        snr_est    = P_max_d[d] * ch_mean / N0    # full power, interference-free
+        r_est      = _rate(snr_est, z[d], d)
         # Crowding: devices already served will compete for the same K PRBs
         crowd_factor = K / (K + n_served[b])
         return r_est * crowd_factor
@@ -321,10 +312,13 @@ def greedy_association(D, H, z, P_max_d):
 
 def compute_rates(D, B, K, H, x, z, p, a, P_max_d):
     """
-    Compute the TRUE achievable rate of each device, Eqs. (5)-(9),
+    Compute the TRUE achievable rate of each device, Eq. (10),
     given a complete allocation (x, a, p).
 
-    A device's total rate is the sum over its assigned PRBs.
+    A device's total rate is the sum of the per-PRB rates r_d^k over its
+    assigned PRBs at its serving O-RU. The SNR is interference-free
+    (Eq. 5): C2 makes each PRB exclusive within an O-RU and inter-cell
+    interference is neglected.
 
     Returns
     -------
@@ -338,13 +332,9 @@ def compute_rates(D, B, K, H, x, z, p, a, P_max_d):
         for k in range(K):
             if a[b_d, d, k] > 0.5:           # PRB k assigned to device d
                 assigned = True
-                # Actual interference from co-associated devices on PRB k
-                I_bar = 0.0
-                for d2 in range(D):
-                    if d2 != d:
-                        I_bar += p[d2, k] * H[b_d, d2, k] * x[b_d, d2]
-                sinr    = p[d, k] * H[b_d, d, k] / max(N0 + I_bar, 1e-30)
-                R_d[d] += _rate(sinr, sc, d)  # sum over assigned PRBs
+                # Interference-free SNR, Eq. (5): noise-limited uplink
+                snr     = p[d, k] * H[b_d, d, k] / max(N0, 1e-30)
+                R_d[d] += _rate(snr, sc, d)   # sum over assigned PRBs, Eq. (10)
         if not assigned:
             R_d[d] = 0.0                      # starved device
     return R_d
@@ -359,6 +349,11 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
     times with sub-gradient updates of the dual variables:
       h_dual[d] : price of the merged rate bound eta_d (C4+C5)
       m_dual[b] : price of the fronthaul capacity (C8)
+
+    Ablation: if RADIO_FROZEN is True the sub-gradient updates are skipped,
+    so h_dual and m_dual stay at their input values (zero when starting from
+    the AO-RA initialisation). The running-fronthaul tracking still enforces
+    C8, i.e. the variant removes the price, not the constraint.
 
     Returns
     -------
@@ -386,7 +381,7 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
             if not served:
                 continue
 
-            # Threshold (bang-bang) power decision per device, Eq. (power_threshold)
+            # Threshold (bang-bang) power decision per device, Eq. (23)
             # Net dual weight: benefit (w + h_d) minus fronthaul price m_b.
             # Positive -> transmit at P_max; negative -> stay silent.
             p_cand = {}
@@ -407,15 +402,15 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
                     if k not in taken_k and H[b, d, k] > best_gain:
                         best_gain, best_k = H[b, d, k], k
                 if best_k >= 0:
-                    sinr_cand           = p_cand[d] * H[b, d, best_k] / max(N0, 1e-30)
-                    r_cand              = _rate(sinr_cand, z[d], d)
+                    snr_cand            = p_cand[d] * H[b, d, best_k] / max(N0, 1e-30)
+                    r_cand              = _rate(snr_cand, z[d], d)
                     a_new[b, d, best_k] = 1
                     p_new[d, best_k]    = p_cand[d]
                     taken_k.add(best_k)
                     C_b_running        += r_cand
                     prb_count[d]       += 1
 
-            # PHASE 2: surplus PRBs by KKT-inspired score Z, Eq. (19)
+            # PHASE 2: surplus PRBs by dual-guided score Z, Eq. (24)
             for sc_priority in phase2_order:
                 # Eligible: same class, under the PRB cap, transmitting
                 sc_served = sorted(
@@ -450,10 +445,10 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
                                 continue
                             if prb_count[d] > min_prb_count:
                                 continue
-                            sinr_cand = (p_cand[d] * H[b, d, k]
+                            snr_cand  = (p_cand[d] * H[b, d, k]
                                          / max(N0, 1e-30))
-                            r_cand    = _rate(sinr_cand, z[d], d)
-                            # Selection metric (Eq. 19 structure):
+                            r_cand    = _rate(snr_cand, z[d], d)
+                            # Selection metric (Eq. 24 structure):
                             # weighted rate minus fronthaul dual cost
                             Z_d       = (r_cand * (W[z[d]] + h_dual[d])
                                          - m_dual[b] * H[b, d, k]
@@ -481,6 +476,10 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
         a   = a_new
         p   = p_new
         R_d = compute_rates(D, B, K, H, x, z, p, a, P_max_d)
+
+        # Ablation: frozen duals -> skip the sub-gradient updates below
+        if RADIO_FROZEN:
+            continue
 
         # Sub-gradient dual updates (Sec. V-D)
         # h_d grows while device d misses its rate bound eta_d (C4+C5)
@@ -511,6 +510,11 @@ def compute_vnf(z, R_d, lambda_d, D, mu_c=MU_C_DEFAULT):
     stability bound C6 (M_c >= Lambda_c / mu_c) and the budget C7
     (M_c <= M_MAX).
 
+    Ablation (VNF_MODE):
+      'lemma1'    : closed form above (paper behaviour)
+      'minstable' : M_c = ceil(Lambda_c / mu_c)  (stability only)
+      'max'       : M_c = M_MAX                  (fixed over-provisioning)
+
     Returns
     -------
     M_c     : dict {class -> number of VNF instances}
@@ -525,6 +529,14 @@ def compute_vnf(z, R_d, lambda_d, D, mu_c=MU_C_DEFAULT):
         T_sc  = T_MAX[sc]                              # delay budget T_c^max
         alp   = alpha_c[sc]
         M_min = max(int(np.ceil(alp / mu_c)), 1)       # C6: queue stability
+
+        # Ablation shortcuts (no per-device computation needed)
+        if VNF_MODE == 'minstable':
+            M_c[sc] = M_min
+            continue
+        if VNF_MODE == 'max':
+            M_c[sc] = M_MAX
+            continue
 
         candidates = []
         for d in range(D):
@@ -753,7 +765,7 @@ def run_monte_carlo(D_list, n_runs=MC_RUNS, seed_base=0):
     """
     results = {s: {D: {} for D in D_list}
                for s in ['aora', 'baseline', 'dr']}
-
+    results['meta'] = {D: {} for D in D_list}
     for D in D_list:
         print(f"\n{'='*60}")
         print(f"  D = {D}  ({n_runs} Monte Carlo runs)")
@@ -784,8 +796,8 @@ def run_monte_carlo(D_list, n_runs=MC_RUNS, seed_base=0):
             for d in range(D):
                 b_fa = int(np.argmin([np.linalg.norm(devices[d] - orus[b])
                                       for b in range(B)]))
-                s_fa = Pmax[d] * H[b_fa, d, d % K] / N0
-                if _rate(s_fa, z[d], d) <= lam[d]:
+                snr_fa = Pmax[d] * H[b_fa, d, d % K] / N0
+                if _rate(snr_fa, z[d], d) <= lam[d]:
                     ok = False
                     break
             if not ok:
@@ -828,6 +840,14 @@ def run_monte_carlo(D_list, n_runs=MC_RUNS, seed_base=0):
             if valid % 10 == 0:
                 print(f"  {valid}/{n_runs} runs done (attempts: {attempt})")
 
+
+        results['meta'][D]['n_attempts']    = attempt
+        results['meta'][D]['n_valid']       = valid
+        results['meta'][D]['n_discarded']   = attempt - valid
+        results['meta'][D]['discard_pct']   = (attempt - valid) / attempt * 100
+        print(f"  Discarded: {attempt - valid}/{attempt} "
+            f"({results['meta'][D]['discard_pct']:.1f}%)")
+        
         # Aggregate statistics per scheme
         def _store(key, u, d, vnf):
             r = results[key][D]
@@ -843,6 +863,9 @@ def run_monte_carlo(D_list, n_runs=MC_RUNS, seed_base=0):
         _store('aora',     u_ao, d_ao, vnf_ao)
         _store('baseline', u_ba, d_ba, vnf_ba)
         _store('dr',       u_dr, d_dr, vnf_dr)
+        results['aora'][D]['utility_runs']     = [float(v) for v in u_ao]
+        results['dr'][D]['utility_runs']       = [float(v) for v in u_dr]
+        results['baseline'][D]['utility_runs'] = [float(v) for v in u_ba]
 
         # Mean convergence trace: pad shorter runs with their converged value
         max_len = max(len(h) for h in histories)
@@ -974,6 +997,10 @@ def analyze_schemes(D, seed=42):
     Run AO-RA, DR, and Baseline on one fixed scenario (fixed seed) and
     return the final allocation of each scheme (association x, rates R,
     per-device PRB counts) for the O-RU load comparison (Fig. 5).
+
+    AO-RA follows Algorithm 2 exactly (SP3 -> SP4 -> record iterate ->
+    convergence test -> SP2, best iterate returned), so Fig. 5 is
+    consistent with the main Monte Carlo and with verify_constraints.py.
     """
     np.random.seed(seed)
     devices, orus   = generate_positions(D)
@@ -988,17 +1015,25 @@ def analyze_schemes(D, seed=42):
         for d in range(D)
     ])
 
-    # --- Proposed AO-RA ---
+    # --- Proposed AO-RA (Algorithm 2: early stop, best iterate) ---
     x = np.zeros((B, D), dtype=int)
     for d in range(D):
         x[int(np.argmax([np.mean(H[b, d, :]) for b in range(B)])), d] = 1
     h0, m0 = np.zeros(D), np.zeros(B)
-    for _ in range(10):
-        p, a, R_d, h0, m0 = lagrangian_kkt(D, B, K, H, x, z, lam, Tmax, Pmax, eta, h0, m0)
-        M_c, alp_c = compute_vnf(z, R_d, lam, D)
+    hist, best = [], None
+    for _ in range(I_MAX):
+        p, a, R_d, h0, m0 = lagrangian_kkt(D, B, K, H, x, z, lam, Tmax, Pmax,
+                                           eta, h0, m0)
+        U = sum(W[z[d]] * R_d[d] for d in range(D))
+        hist.append(U)
+        # Keep the best iterate together with the association it used
+        if best is None or U > best[0]:
+            best = (U, x.copy(), p.copy(), a.copy(), R_d.copy())
+        if (len(hist) > 1 and
+                abs(hist[-1] - hist[-2]) / max(abs(hist[-1]), 1.0) < EPS_CONV):
+            break
         x = greedy_association(D, H, z, Pmax)
-    p, a, R_d, h0, m0 = lagrangian_kkt(D, B, K, H, x, z, lam, Tmax, Pmax, eta, h0, m0)
-    M_c, alp_c = compute_vnf(z, R_d, lam, D)
+    _, x, p, a, R_d = best
     rows = []
     for d in range(D):
         b_d   = int(np.argmax(x[:, d]))
