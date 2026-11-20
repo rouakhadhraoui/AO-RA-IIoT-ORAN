@@ -540,7 +540,7 @@ def compute_vnf(z, R_d, lambda_d, D, mu_c=MU_C_DEFAULT):
     for sc in SERVICE_CLASSES:
         T_sc  = T_MAX[sc]                              # delay budget T_c^max
         alp   = alpha_c[sc]
-        M_min = max(int(np.ceil(alp / mu_c)), 1)       # C6: queue stability
+        M_min = int(np.floor(alp / mu_c)) + 1          # strict C6: M_c > Lambda_c/mu_c
 
         # Ablation shortcuts (no per-device computation needed)
         if VNF_MODE == 'minstable':
@@ -563,8 +563,9 @@ def compute_vnf(z, R_d, lambda_d, D, mu_c=MU_C_DEFAULT):
                 continue
             # Lemma 1 closed form
             num = alp * (T_sc * R - T_sc * lam - 1)
-            den = max((T_sc * mu_c - 3) * (R - lam) - mu_c, 1e-6)  # guard /0
-            if num <= 0:
+            den = (T_sc * mu_c - 3) * (R - lam) - mu_c
+            if num <= 0 or den <= 0:
+                # Lemma 1 not valid (no positive service margin): request M_MAX
                 candidates.append(M_MAX)
             else:
                 candidates.append(int(np.ceil(num / den)))
