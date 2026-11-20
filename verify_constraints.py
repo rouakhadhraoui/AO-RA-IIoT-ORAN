@@ -3,7 +3,7 @@ Per-device constraint verification tables (reviewer-facing evidence).
 
 Runs AO-RA on a single deterministic realization (seed = 42) for a given
 device count D and prints/exports a table checking, per device:
-    C1 (transmit power cap), C4 (minimum rate), C5 (end-to-end delay)
+    C1 (per-device transmit power budget, summed over assigned PRBs), C4 (minimum rate), C5 (end-to-end delay)
 and, per O-RU:
     C8 (fronthaul capacity)
 plus starvation (devices with 0 PRBs) and the per-class PRB distribution.
@@ -68,7 +68,7 @@ def debug_table(D, H, z, x, a, p, R_d, M_c, alpha_c,
         prbs = [k for k in range(K) if a[b_d, d, k] > 0.5]
         sc   = z[d]
 
-        p_max_prb = float(np.max(p[d, :])) if np.any(p[d, :] > 0) else 0.0
+        p_tot = float(np.sum(p[d, :]))   # total power over all assigned PRBs (per-device C1)
         # Interference-free SNR (Eq. 5) on the first assigned PRB
         snr = (p[d, prbs[0]] * H[b_d, d, prbs[0]] / N0) if prbs else 0.0
 
@@ -86,9 +86,9 @@ def debug_table(D, H, z, x, a, p, R_d, M_c, alpha_c,
             'O-RU'          : b_d,
             'n_PRBs'        : len(prbs),
             'PRBs'          : str(prbs),
-            'power_W'       : round(p_max_prb, 4),
+            'power_W'       : round(p_tot, 4),
             'P_max_W'       : round(P_MAX[sc], 4),
-            'meets_C1'      : bool(p_max_prb <= P_MAX[sc] * 1.001),
+            'meets_C1'      : bool(p_tot <= P_MAX[sc] * 1.001),
             'SNR_dB'        : round(10 * np.log10(snr), 2) if snr > 0 else None,
             'rate_Mbps'     : round(R_d[d] / 1e6, 3),
             'R_min_dyn_Mbps': round(R_min_dyn[sc] / 1e6, 3),
