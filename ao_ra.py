@@ -339,6 +339,18 @@ def compute_rates(D, B, K, H, x, z, p, a, P_max_d):
             R_d[d] = 0.0                      # starved device
     return R_d
 
+def enforce_device_power_budget(p, P_max_d):
+    """
+    Enforce the per-DEVICE power budget (C1): sum_k p[d,k] <= P_max_d[d].
+    The per-PRB powers chosen by the threshold rule are scaled by a common
+    factor, i.e. equal split of P_max_d over the PRBs assigned to device d.
+    """
+    p = p.copy()
+    for d in range(p.shape[0]):
+        total = p[d].sum()
+        if total > P_max_d[d]:
+            p[d] *= P_max_d[d] / total
+    return p
 
 def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
                    eta_d, h_dual_in, m_dual_in):
@@ -474,7 +486,7 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
                             break
 
         a   = a_new
-        p   = p_new
+        p   = enforce_device_power_budget(p_new, P_max_d)
         R_d = compute_rates(D, B, K, H, x, z, p, a, P_max_d)
 
         # Ablation: frozen duals -> skip the sub-gradient updates below
