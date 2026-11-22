@@ -70,8 +70,8 @@ def grouped(ax, series, labels, idx, width=0.78):
 
 # ---- 1) Sensitivity: (a) I_max, (b) epsilon ---------------------------------
 fig, ax = plt.subplots(1, 2, figsize=(W, 3.6))
-grouped(ax[0], [[44.27, 70.98, 83.03, 87.06], [45.33, 74.87, 86.23, 88.76],
-                [45.33, 74.87, 86.23, 88.76]],
+grouped(ax[0], [[41.96, 67.83, 80.27, 85.21], [42.92, 71.37, 83.21, 86.84],
+                [42.92, 71.37, 83.21, 86.84]],
         ["$I_{\\max}=1$", "$I_{\\max}=2$", "$I_{\\max}\\geq 3$"], [2, 1, 0])
 ax[0].set_xticklabels(D)
 ax[0].set_xlabel(XL)
@@ -95,7 +95,7 @@ save(fig, "fig_sensitivity")
 
 # ---- 2) Inter-cell interference ---------------------------------------------
 fig, ax = plt.subplots(1, 2, figsize=(W, 3.6))
-grouped(ax[0], [[45.3, 74.9, 86.2, 88.8], [16.2, 21.4, 24.7, 25.8], [4.3, 4.8, 4.8, 4.4]],
+grouped(ax[0], [[42.9, 71.4, 83.2, 86.8], [15.6, 20.9, 24.4, 25.7], [3.0, 3.3, 3.5, 3.7]],
         ["Noise-limited", "Actual interference", "Worst case"], [0, 1, 2])
 ax[0].set_xticklabels(D)
 ax[0].set_xlabel(XL)
@@ -117,7 +117,7 @@ save(fig, "fig_intercell")
 # ---- 3) Ablation at D = 18 ---------------------------------------------------
 names = ["Baseline", "GAA + random PRB", "Slice-partition", "DR Scheme",
          "AO-RA (duals frozen)", "Proposed AO-RA"]
-vals = [30.56, 30.54, 70.96, 70.98, 74.87, 74.87]
+vals = [30.56, 30.54, 67.84, 67.83, 71.37, 71.37]
 ci = [2, 2, 3, 1, 0, 0]
 fig, ax = plt.subplots(figsize=(W, 3.8))
 y = np.arange(len(names))[::-1]
@@ -164,7 +164,7 @@ bottom = np.zeros(3)
 for lab, v, i in comp:
     bars(ax, xx, v, 0.5, i, lab, bottom=bottom)
     bottom += np.array(v)
-for i, t in enumerate([209, 244, 293]):
+for i, t in enumerate([210, 245, 293]):
     ax.text(i, t + 6, f"{t}", ha="center", fontsize=11)
 ax.set_ylim(0, 430)
 ax.set_xticks(xx)

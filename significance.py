@@ -5,7 +5,7 @@ from ao_ra import run_monte_carlo
 
 D_LIST = [9, 18, 27, 36]
 N_RUNS = 100            
-FILE = f'results/mc_runs_{N_RUNS}.npy'
+FILE = 'results/mc_results.npy'   # R1: per-device power budget results
 
 if os.path.exists(FILE):
     results = np.load(FILE, allow_pickle=True).item()

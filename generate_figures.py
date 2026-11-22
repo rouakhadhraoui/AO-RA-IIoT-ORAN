@@ -15,9 +15,6 @@ Outputs (in ./results/):
     fig5_oru_load.{pdf,png}          O-RU load distribution (D = 27)
     mc_results.npy                   Cached Monte Carlo statistics
 
-Full reproduction (--force) takes on the order of a few hours on a laptop
-(the dominant cost is Fig. 3's delay sweep: 3 device counts x 10 arrival
-rates x 100 realizations).
 """
 
 import argparse

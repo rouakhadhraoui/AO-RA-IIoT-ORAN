@@ -98,6 +98,7 @@ def run_variant(v, D, H, z, lam, Tmax, Pmax, devices, orus):
     elif v == 'slice':
         x = nearest_assoc(devices, orus, D)
         p, a = slice_radio(x, H, z, Pmax, D)
+        p = m.enforce_device_power_budget(p, Pmax)
     return m.compute_rates(D, m.B, m.K, H, x, z, p, a, Pmax)
 
 

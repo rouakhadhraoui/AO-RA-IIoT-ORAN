@@ -16,7 +16,7 @@ This module contains:
     - SP3: PRB and power allocation via Lagrangian + KKT (Section V-D)
     - SP4: VNF sizing via closed-form Lemma 1 (Section V-E)
     - AO-RA main loop (Algorithm 2)
-    - Baseline and Dynamic Resource (DR) benchmark schemes (Section VI-A)
+    - Baseline (single-PRB and multi-PRB) and Dynamic Resource (DR) benchmarks
     - Monte Carlo experiment and figure-generation utilities (Section VI)
 
 All results in the paper are averaged over 100 Monte Carlo realizations with
@@ -100,6 +100,8 @@ MAX_PRB_PER_DEVICE = 3   # Cap on PRBs per device (fairness rule in SP3)
 # --- Ablation switches (defaults = behaviour reported in the paper) ---------
 RADIO_FROZEN = False     # True: dual variables h_d, m_b frozen at 0 (no pricing)
 VNF_MODE     = 'lemma1'  # 'lemma1' | 'minstable' (M=ceil(Lambda/mu)) | 'max' (M=M_MAX)
+RMIN_MODE    = 'adaptive'          # 'adaptive' | 'fixed'  (R3-7)
+R_MIN_FIXED  = dict(R_MIN)         # overwritten by fixed_rmin_eval.py
 
 
 # ============================================================================
@@ -224,13 +226,19 @@ def get_device_params(z, D):
 
 def compute_dynamic_rmin(D, H, z, P_max_d, silent=False):
     """
-    Channel-adaptive per-class minimum rate requirement (feeds C4).
+    Per-class minimum rate requirement (feeds C4).
 
-    For each service class: find the best interference-free rate each
-    device could achieve (max over O-RUs and PRBs at full power), take
-    the WEAKEST device in the class, and set the class requirement to
-    50% of that value (floored at 1 kbps).
+    RMIN_MODE == 'fixed'   : the same per-class values R_MIN_FIXED in every
+                             drop (R3-7 scenario).
+    RMIN_MODE == 'adaptive': channel-adaptive value (original behaviour).
+        For each service class: find the best interference-free rate each
+        device could achieve (max over O-RUs and PRBs at full power), take
+        the WEAKEST device in the class, and set the class requirement to
+        50% of that value (floored at 1 kbps).
     """
+    if RMIN_MODE == 'fixed':
+        return dict(R_MIN_FIXED)
+
     R_dyn = {}
     for sc in SERVICE_CLASSES:
         sc_devices = [d for d in range(D) if z[d] == sc]
@@ -259,7 +267,7 @@ def compute_dynamic_rmin(D, H, z, P_max_d, silent=False):
 # 4. SP2: O-RU ASSOCIATION (GAA, Algorithm 1)
 # ============================================================================
 
-def greedy_association(D, H, z, P_max_d):
+def greedy_association(D, H, z, P_max_d, stats=None):
     """
     SP2 -- Greedy Assignment Algorithm (GAA), Algorithm 1 of the paper.
     Executed at the Near-RT RIC. Determines x_{b,d} subject to C3, C8.
@@ -295,6 +303,8 @@ def greedy_association(D, H, z, P_max_d):
 
         # Fallback: no feasible O-RU -> largest residual capacity (C3)
         if best_b < 0:
+            if stats is not None:
+                stats['fb'] += 1
             best_b = int(np.argmax(C_tilde))
             best_r = estimate_rate(d, best_b)
 
@@ -384,6 +394,7 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
     phase2_order = ['eMBB', 'URLLC', 'mMTC']
 
     for t in range(T_INNER):
+        h_old, m_old = h_dual.copy(), m_dual.copy()
         step  = ALPHA0_STEP / np.sqrt(t + 1)   # diminishing step (Sec. V-D)
         a_new = np.zeros((B, D, K))
         p_new = np.zeros((D, K))
@@ -504,7 +515,8 @@ def lagrangian_kkt(D, B, K, H, x, z, lambda_d, T_max_d, P_max_d,
             C_b       = sum(x[b, d] * R_d[d] for d in range(D))
             grad      = (C_b - C_MAX_B) / C_MAX_B                  # normalized
             m_dual[b] = max(0.0, m_dual[b] + step * grad)
-
+        if np.array_equal(h_dual, h_old) and np.array_equal(m_dual, m_old):
+            break
     R_d = compute_rates(D, B, K, H, x, z, p, a, P_max_d)
     return p, a, R_d, h_dual, m_dual
 
@@ -602,12 +614,12 @@ def compute_delay(d, sc, R_d, lambda_d, M_c, alpha_c,
 # 7. AO-RA MAIN ALGORITHM (Algorithm 2)
 # ============================================================================
 
-def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT):
+def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT, detail=False):
     """
     AO-RA -- Algorithm 2: the complete alternating-optimization loop.
 
-    Pre-processing: dynamic per-class R_min, merged rate bound eta_d
-    (C4+C5), best-mean-channel initial association, zero-initialized duals.
+    Pre-processing: per-class R_min, merged rate bound eta_d (C4+C5),
+    best-mean-channel initial association, zero-initialized duals.
     Loop: SP3 (PRB+power) -> SP4 (VNF sizing) -> SP2 (GAA association),
     tracking the weighted sum rate U until relative convergence.
 
@@ -617,6 +629,10 @@ def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT):
     best_R_d     : (D,) rates of the best iterate
     best_M_c     : dict, VNF allocation of the best iterate
     best_alpha_c : dict, aggregate arrival rates Lambda_c
+    (if detail=True, a 5th element is returned:
+        {'x_best': association of the best iterate,
+         'last'  : (R_d, M_c, alpha_c, x) of the LAST iterate,
+                   i.e. the one evaluated when the loop stops})
     """
     # Pre-processing (SP1 outputs + merged rate bound)
     R_min_dyn = compute_dynamic_rmin(D, H, z, P_max_d, silent=True)
@@ -641,6 +657,7 @@ def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT):
 
     history = []
     best_U, best_R_d, best_M_c, best_alpha_c = -np.inf, None, None, None
+    best_x, last = None, None
 
     for i in range(I_MAX):
         # SP3 (O-DU): PRB + power given x
@@ -655,10 +672,14 @@ def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT):
         U = sum(W[z[d]] * R_d[d] for d in range(D))
         history.append(U)
 
-        # Keep the best iterate seen so far
+        # Last iterate = the one evaluated when the loop stops
+        last = (R_d.copy(), dict(M_c), dict(alpha_c), x.copy())
+
+        # Keep the best iterate seen so far (and the association it used)
         if U > best_U:
             best_U, best_R_d, best_M_c, best_alpha_c = \
                 U, R_d.copy(), dict(M_c), dict(alpha_c)
+            best_x = x.copy()
 
         # Relative convergence test
         if len(history) > 1:
@@ -669,6 +690,9 @@ def AO_RA(D, H, z, lambda_d, T_max_d, P_max_d, mu_c=MU_C_DEFAULT):
         # SP2 (Near-RT RIC): refresh association for next iteration
         x = greedy_association(D, H, z, P_max_d)
 
+    if detail:
+        return history, best_R_d, best_M_c, best_alpha_c, \
+               {'x_best': best_x, 'last': last}
     return history, best_R_d, best_M_c, best_alpha_c
 
 
@@ -709,6 +733,71 @@ def baseline_scheme(D, H, z, lambda_d, T_max_d, P_max_d,
         for k in range(K):
             if a[b_d, d, k] > 0.5:
                 p[d, k] = P_max_d[d]
+
+    R_d          = compute_rates(D, B, K, H, x, z, p, a, P_max_d)
+    M_c, alpha_c = compute_vnf(z, R_d, lambda_d, D, mu_c)
+    U            = sum(W[z[d]] * R_d[d] for d in range(D))
+    return U, R_d, M_c, alpha_c
+
+
+def baseline_multiprb(D, H, z, lambda_d, T_max_d, P_max_d, devices, orus,
+                      rng, mu_c=MU_C_DEFAULT, kmax=MAX_PRB_PER_DEVICE,
+                      fill=False, c8=False):
+    """
+    Multi-PRB Baseline (R3-6): nearest O-RU, random PRBs, up to kmax per
+    device, equal split of P_max_d over the assigned PRBs (C1 holds).
+    c8=True: extra PRBs are added only while the running fronthaul load
+    (full-power rate, as in SP3) stays below C_MAX_B; the first PRB of each
+    device is always granted (same guarantee phase as AO-RA).
+    Uses its OWN generator `rng`, so global RNG state is untouched.
+    """
+    x = np.zeros((B, D), dtype=int)
+    for d in range(D):
+        x[int(np.argmin([np.linalg.norm(devices[d] - orus[b])
+                         for b in range(B)])), d] = 1
+
+    a = np.zeros((B, D, K))
+    for b in range(B):
+        served = [d for d in range(D) if x[b, d] == 1]
+        if not served:
+            continue
+        free = [int(k) for k in rng.permutation(K)]
+        load = 0.0
+
+        def r_full(d, k):
+            return _rate(P_max_d[d] * H[b, d, k] / max(N0, 1e-30), z[d], d)
+
+        # Pass 1: one random PRB per device
+        for d in rng.permutation(served):
+            d = int(d)
+            if free:
+                k = free.pop()
+                a[b, d, k] = 1
+                load += r_full(d, k)
+        # Pass 2: extra random PRBs up to each device's target
+        target = {d: (kmax if fill else int(rng.integers(1, kmax + 1)))
+                  for d in served}
+        while free:
+            cand = [d for d in served if a[b, d].sum() < target[d]]
+            if not cand:
+                break
+            d = cand[int(rng.integers(len(cand)))]
+            k = free[-1]
+            if c8:
+                r = r_full(d, k)
+                if load + r > C_MAX_B:
+                    target[d] = a[b, d].sum()      # device d gets no more PRBs
+                    continue
+                load += r
+            free.pop()
+            a[b, d, k] = 1
+
+    p = np.zeros((D, K))
+    for d in range(D):
+        b_d = int(np.argmax(x[:, d]))
+        ks  = np.where(a[b_d, d] > 0.5)[0]
+        if len(ks):
+            p[d, ks] = P_max_d[d] / len(ks)
 
     R_d          = compute_rates(D, B, K, H, x, z, p, a, P_max_d)
     M_c, alpha_c = compute_vnf(z, R_d, lambda_d, D, mu_c)
@@ -860,7 +949,7 @@ def run_monte_carlo(D_list, n_runs=MC_RUNS, seed_base=0):
         results['meta'][D]['discard_pct']   = (attempt - valid) / attempt * 100
         print(f"  Discarded: {attempt - valid}/{attempt} "
             f"({results['meta'][D]['discard_pct']:.1f}%)")
-        
+
         # Aggregate statistics per scheme
         def _store(key, u, d, vnf):
             r = results[key][D]
